@@ -28,15 +28,15 @@ sleep 5
 
 # Stop Glue job
 echo -e "${YELLOW}Stopping Glue streaming job...${NC}"
+echo '{"action": "stop"}' > /tmp/payload.json
 aws lambda invoke \
     --function-name "$ORCHESTRATOR" \
-    --payload '{"action": "stop"}' \
-    response.json \
+    --cli-binary-format raw-in-base64-out \
+    --payload file:///tmp/payload.json \
+    /tmp/response.json \
     --region ap-southeast-1
-
-cat response.json | python3 -m json.tool
-rm response.json
-echo ""
+mv /tmp/response.json response.json
+rm -f /tmp/payload.json
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Pipeline Stopped Successfully!${NC}"
