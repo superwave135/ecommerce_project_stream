@@ -30,7 +30,7 @@ db_instance_class          = "db.t3.micro"
 db_engine_version          = "15.15"
 db_allocated_storage       = 20
 db_name                    = "ecommerce_analytics"
-db_username                = "admin"
+db_username                = "dbadmin"
 # db_password              = "CHANGE_ME_IN_TERRAFORM_APPLY"  # Pass via CLI: -var="db_password=YourSecurePassword"
 db_port                    = 5432
 db_backup_retention_period = 1
