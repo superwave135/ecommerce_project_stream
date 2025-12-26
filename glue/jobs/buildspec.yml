@@ -19,7 +19,7 @@ phases:
       - echo "Build phase started on $(date)"
       - |
         # Upload Glue job script to S3
-        aws s3 cp stream_processor.py s3://ecommerce-streaming-scripts/glue-jobs/stream_processor.py
+        aws s3 cp stream_processor.py s3://ecommerce-streaming-dev-scripts-881786084229/glue-jobs/stream_processor.py
       - echo "Glue job script uploaded to S3"
       
   post_build:
@@ -28,8 +28,8 @@ phases:
       - |
         # Update Glue job with new script
         aws glue update-job \
-          --job-name ecommerce-stream-processor \
-          --job-update "Command={Name=glueetl,ScriptLocation=s3://ecommerce-streaming-scripts/glue-jobs/stream_processor.py,PythonVersion=3}" \
+          --job-name ecommerce-streaming-dev-stream-processor \
+          --job-update "Command={Name=glueetl,ScriptLocation=s3://ecommerce-streaming-dev-scripts-881786084229/glue-jobs/stream_processor.py,PythonVersion=3}" \
           --region ${AWS_REGION}
       - echo "Glue job updated successfully"
       - echo "Build completed on $(date)"
