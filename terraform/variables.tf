@@ -8,7 +8,7 @@
 variable "aws_region" {
   description = "AWS region for resources"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-southeast-1"
 }
 
 variable "project_name" {
@@ -203,7 +203,7 @@ variable "database_subnet_cidrs" {
 variable "availability_zones" {
   description = "Availability zones"
   type        = list(string)
-  default     = ["us-east-1a", "us-east-1b"]
+  default     = ["ap-southeast-1a", "ap-southeast-1b"]
 }
 
 # ============================================
