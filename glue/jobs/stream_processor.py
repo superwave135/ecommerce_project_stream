@@ -163,22 +163,22 @@ earliest_clicks = attribution_df.groupBy("checkout.event_id") \
 # Join back to get the full click details for the earliest click
 attributed_df = earliest_clicks.alias("earliest") \
     .join(
-        attribution_df.alias("full"),
-        (col("earliest.event_id") == col("full.checkout.event_id")) &
-        (col("earliest.earliest_click_time") == col("full.click.event_timestamp")),
+        attribution_df,
+        (col("earliest.event_id") == col("checkout.event_id")) &
+        (col("earliest.earliest_click_time") == col("click.event_timestamp")),
         "inner"
     ) \
     .select(
-        col("full.checkout.event_id").alias("checkout_id"),
+        col("checkout.event_id").alias("checkout_id"),
         col("earliest.user_id").alias("user_id"),
         col("earliest.checkout_timestamp").alias("checkout_timestamp"),
-        col("full.click.event_id").alias("attributed_click_id"),
-        col("full.click.product_id").alias("attributed_product_id"),
-        col("full.click.product_name").alias("attributed_product_name"),
-        col("full.click.product_category").alias("attributed_category"),
-        col("full.click.referrer").alias("traffic_source"),
-        col("full.click.device_type").alias("device_type"),
-        col("full.click.event_timestamp").alias("first_click_timestamp"),
+        col("click.event_id").alias("attributed_click_id"),
+        col("click.product_id").alias("attributed_product_id"),
+        col("click.product_name").alias("attributed_product_name"),
+        col("click.product_category").alias("attributed_category"),
+        col("click.referrer").alias("traffic_source"),
+        col("click.device_type").alias("device_type"),
+        col("click.event_timestamp").alias("first_click_timestamp"),
         col("earliest.revenue").alias("revenue"),
         current_timestamp().alias("processed_at")
     )
