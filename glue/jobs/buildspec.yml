@@ -1,0 +1,40 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing AWS CLI..."
+      - pip install --upgrade awscli
+      
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on $(date)"
+      - cd glue/jobs
+      - echo "Preparing Glue job scripts..."
+      
+  build:
+    commands:
+      - echo "Build phase started on $(date)"
+      - |
+        # Upload Glue job script to S3
+        aws s3 cp stream_processor.py s3://ecommerce-streaming-scripts/glue-jobs/stream_processor.py
+      - echo "Glue job script uploaded to S3"
+      
+  post_build:
+    commands:
+      - echo "Post-build phase started on $(date)"
+      - |
+        # Update Glue job with new script
+        aws glue update-job \
+          --job-name ecommerce-stream-processor \
+          --job-update "Command={Name=glueetl,ScriptLocation=s3://ecommerce-streaming-scripts/glue-jobs/stream_processor.py,PythonVersion=3}" \
+          --region ${AWS_REGION}
+      - echo "Glue job updated successfully"
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - stream_processor.py
+  name: glue-job-$(date +%Y%m%d-%H%M%S)

@@ -1,0 +1,38 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
+      
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on $(date)"
+      - cd lambda/data_generator
+      - pip install -r requirements.txt -t .
+      - echo "Dependencies installed"
+      
+  build:
+    commands:
+      - echo "Build phase started on $(date)"
+      - zip -r lambda_function.zip .
+      - echo "Lambda package created"
+      
+  post_build:
+    commands:
+      - echo "Post-build phase started on $(date)"
+      - |
+        aws lambda update-function-code \
+          --function-name ecommerce-data-generator \
+          --zip-file fileb://lambda_function.zip \
+          --region ${AWS_REGION}
+      - echo "Lambda function updated successfully"
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - lambda_function.zip
+  name: data-generator-$(date +%Y%m%d-%H%M%S)

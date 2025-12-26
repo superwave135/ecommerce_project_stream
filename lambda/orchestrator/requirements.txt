@@ -1,0 +1,3 @@
+# No external dependencies required
+# All Lambda functions use only built-in Python libraries and boto3 (provided by AWS Lambda runtime)
+
