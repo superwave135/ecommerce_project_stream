@@ -99,6 +99,7 @@ def read_kinesis_stream(stream_name, schema):
         .format("kinesis") \
         .option("streamName", stream_name) \
         .option("region", "ap-southeast-1") \
+        .option("endpointUrl", "https://kinesis.ap-southeast-1.amazonaws.com") \
         .option("initialPosition", "TRIM_HORIZON") \
         .option("format", "json") \
         .load()
