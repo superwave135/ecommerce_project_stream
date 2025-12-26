@@ -18,15 +18,15 @@ DATA_GEN_RULE="ecommerce-streaming-dev-data-generation"
 
 # Start Glue job
 echo -e "${YELLOW}Starting Glue streaming job...${NC}"
+echo '{"action": "start"}' > /tmp/payload.json
 aws lambda invoke \
     --function-name "$ORCHESTRATOR" \
-    --payload '{"action": "start"}' \
-    response.json \
+    --cli-binary-format raw-in-base64-out \
+    --payload file:///tmp/payload.json \
+    /tmp/response.json \
     --region ap-southeast-1
-
-cat response.json | python3 -m json.tool
-rm response.json
-echo ""
+mv /tmp/response.json response.json
+rm -f /tmp/payload.json
 
 # Enable data generation
 echo -e "${YELLOW}Enabling data generation...${NC}"
