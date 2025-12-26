@@ -27,7 +27,7 @@ glue_timeout         = 60
 
 # RDS
 db_instance_class          = "db.t3.micro"
-db_engine_version          = "15.4"
+db_engine_version          = "15.15"
 db_allocated_storage       = 20
 db_name                    = "ecommerce_analytics"
 db_username                = "admin"
