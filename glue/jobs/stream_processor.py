@@ -1,25 +1,23 @@
 """
 AWS Glue Streaming Job - E-commerce Click Attribution
-Processes click and checkout events from Kinesis to perform first-click attribution
+Processes click and checkout events from Kinesis streams
 """
 
 import sys
 import os
 
-# FORCE AWS REGION - CRITICAL FOR KINESIS
 os.environ['AWS_DEFAULT_REGION'] = 'ap-southeast-1'
 os.environ['AWS_REGION'] = 'ap-southeast-1'
 
-from datetime import datetime
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql import DataFrame, Window
+from pyspark.sql import Window
 from pyspark.sql.functions import (
-    col, from_json, to_timestamp, current_timestamp, 
-    window, first, min, unix_timestamp, lit, expr, row_number
+    col, from_json, to_timestamp, current_timestamp,
+    unix_timestamp, expr, row_number
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType, 
@@ -46,86 +44,22 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-# Configure Spark for streaming
+# Spark configuration
 spark.conf.set("spark.sql.streaming.schemaInference", "true")
 spark.conf.set("spark.sql.streaming.checkpointLocation", args['CHECKPOINT_LOCATION'])
 spark.conf.set("spark.sql.adaptive.enabled", "true")
 
+# PostgreSQL configuration
+postgres_url = f"jdbc:postgresql://{args['DATABASE_HOST']}:{args['DATABASE_PORT']}/{args['DATABASE_NAME']}"
+postgres_properties = {
+    "user": args['DATABASE_USER'],
+    "password": args['DATABASE_PASSWORD'],
+    "driver": "org.postgresql.Driver"
+}
 
-def create_tables_if_not_exist():
-    """Create PostgreSQL tables if they don't exist"""
-    import psycopg2
-    
-    schema_sql = """
-    CREATE TABLE IF NOT EXISTS events_clicks (
-        event_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        session_id VARCHAR(255),
-        product_id VARCHAR(255),
-        product_category VARCHAR(255),
-        referrer VARCHAR(500),
-        device_type VARCHAR(50),
-        event_timestamp TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+print(f"Connecting to PostgreSQL at {args['DATABASE_HOST']}:{args['DATABASE_PORT']}/{args['DATABASE_NAME']}")
 
-    CREATE TABLE IF NOT EXISTS events_checkouts (
-        event_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        session_id VARCHAR(255),
-        total_amount DECIMAL(10,2),
-        payment_method VARCHAR(50),
-        event_timestamp TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS session_attribution (
-        checkout_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        checkout_timestamp TIMESTAMP,
-        attributed_click_id VARCHAR(255),
-        attributed_product_id VARCHAR(255),
-        attributed_product_name VARCHAR(255),
-        attributed_category VARCHAR(255),
-        traffic_source VARCHAR(500),
-        device_type VARCHAR(50),
-        first_click_timestamp TIMESTAMP,
-        revenue DECIMAL(10,2),
-        attribution_window_seconds INTEGER,
-        processed_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_clicks_user ON events_clicks(user_id);
-    CREATE INDEX IF NOT EXISTS idx_clicks_timestamp ON events_clicks(event_timestamp);
-    CREATE INDEX IF NOT EXISTS idx_checkouts_user ON events_checkouts(user_id);
-    CREATE INDEX IF NOT EXISTS idx_checkouts_timestamp ON events_checkouts(event_timestamp);
-    CREATE INDEX IF NOT EXISTS idx_attribution_user ON session_attribution(user_id);
-    """
-    
-    try:
-        conn = psycopg2.connect(
-            host=args['DATABASE_HOST'],
-            database=args['DATABASE_NAME'],
-            user=args['DATABASE_USER'],
-            password=args['DATABASE_PASSWORD'],
-            port=int(args['DATABASE_PORT'])
-        )
-        with conn.cursor() as cur:
-            cur.execute(schema_sql)
-            conn.commit()
-        conn.close()
-        print("✅ Tables created/verified successfully")
-    except Exception as e:
-        print(f"⚠️ Table creation failed: {e}")
-        raise
-
-
-# Create tables before starting streams
-print("Creating database tables...")
-create_tables_if_not_exist()
-
-# Define schemas
+# Define schemas for Kinesis data
 click_schema = StructType([
     StructField("event_id", StringType(), True),
     StructField("user_id", StringType(), True),
@@ -157,18 +91,11 @@ checkout_schema = StructType([
     StructField("payment_method", StringType(), True)
 ])
 
-# PostgreSQL connection properties
-postgres_properties = {
-    "user": args['DATABASE_USER'],
-    "password": args['DATABASE_PASSWORD'],
-    "driver": "org.postgresql.Driver"
-}
-
-postgres_url = f"jdbc:postgresql://{args['DATABASE_HOST']}:{args['DATABASE_PORT']}/{args['DATABASE_NAME']}"
-
 
 def read_kinesis_stream(stream_name, schema):
-    """Read from Kinesis stream and parse JSON data"""
+    """Read and parse data from Kinesis stream"""
+    print(f"Reading from Kinesis stream: {stream_name}")
+    
     kinesis_df = spark.readStream \
         .format("kinesis") \
         .option("streamName", stream_name) \
@@ -193,9 +120,11 @@ def read_kinesis_stream(stream_name, schema):
 
 
 def write_to_postgres(batch_df, batch_id, table_name):
-    """Write DataFrame to PostgreSQL"""
+    """Write batch DataFrame to PostgreSQL table"""
     try:
-        if batch_df.count() > 0:
+        row_count = batch_df.count()
+        
+        if row_count > 0:
             batch_df.write \
                 .jdbc(
                     url=postgres_url,
@@ -203,21 +132,30 @@ def write_to_postgres(batch_df, batch_id, table_name):
                     mode="append",
                     properties=postgres_properties
                 )
-            print(f"Batch {batch_id}: Written {batch_df.count()} records to {table_name}")
+            print(f"✅ Batch {batch_id}: Written {row_count} records to {table_name}")
         else:
-            print(f"Batch {batch_id}: No records to write to {table_name}")
+            print(f"⏭️  Batch {batch_id}: No records to write to {table_name}")
+            
     except Exception as e:
-        print(f"Error writing batch {batch_id} to PostgreSQL {table_name}: {str(e)}")
-        raise
+        print(f"❌ Error writing batch {batch_id} to {table_name}: {str(e)}")
+        # Don't raise - let job continue processing other batches
 
 
 def process_attribution_batch(batch_df, batch_id):
-    """Process attribution for a micro-batch"""
+    """
+    Process attribution for a micro-batch using first-click attribution.
+    Applies window functions to find the earliest click for each checkout.
+    """
     try:
-        if batch_df.count() == 0:
-            print(f"Batch {batch_id}: No records to process for attribution")
+        row_count = batch_df.count()
+        
+        if row_count == 0:
+            print(f"⏭️  Batch {batch_id}: No records to process for attribution")
             return
         
+        print(f"🔄 Processing attribution for batch {batch_id} with {row_count} records")
+        
+        # Apply window function to get first (earliest) click for each checkout
         window_spec = Window.partitionBy("checkout_event_id").orderBy("click_event_timestamp")
         
         attributed_df = batch_df \
@@ -238,28 +176,37 @@ def process_attribution_batch(batch_df, batch_id):
                 current_timestamp().alias("processed_at")
             )
         
+        # Calculate time between click and checkout
         final_df = attributed_df.withColumn(
             "attribution_window_seconds",
             unix_timestamp(col("checkout_timestamp")) - unix_timestamp(col("first_click_timestamp"))
         )
         
+        # Write to PostgreSQL
         write_to_postgres(final_df, batch_id, "session_attribution")
         
     except Exception as e:
-        print(f"Error processing attribution batch {batch_id}: {str(e)}")
-        raise
+        print(f"❌ Error processing attribution batch {batch_id}: {str(e)}")
 
 
-# Read streams
-print("Reading Kinesis streams...")
+# Read Kinesis streams
+print("=" * 60)
+print("Starting E-commerce Click Attribution Streaming Job")
+print("=" * 60)
+
 clicks_df = read_kinesis_stream(args['CLICKS_STREAM_NAME'], click_schema)
 checkouts_df = read_kinesis_stream(args['CHECKOUTS_STREAM_NAME'], checkout_schema)
 
-# Add watermarks
+# Add watermarks for handling late data
 clicks_with_watermark = clicks_df.withWatermark("event_timestamp", "5 minutes")
 checkouts_with_watermark = checkouts_df.withWatermark("event_timestamp", "5 minutes")
 
-# Stream-stream join
+print("Watermarks configured: 5 minutes for late data handling")
+
+# Perform stream-to-stream join
+# Join checkouts with clicks that occurred within 1 hour before checkout
+print("Configuring stream-to-stream join with 1-hour attribution window")
+
 joined_df = checkouts_with_watermark.alias("checkout") \
     .join(
         clicks_with_watermark.alias("click"),
@@ -282,18 +229,23 @@ joined_df = checkouts_with_watermark.alias("checkout") \
         col("click.event_timestamp").alias("click_event_timestamp")
     )
 
-# Write streams
-print("Starting streaming queries...")
+# Start streaming queries
+print("=" * 60)
+print("Starting 3 streaming queries:")
+print("  1. Attribution (session_attribution table)")
+print("  2. Raw Clicks (events_clicks table)")
+print("  3. Raw Checkouts (events_checkouts table)")
+print("=" * 60)
 
-# Attribution stream
-query = joined_df.writeStream \
+# Query 1: Attribution stream
+attribution_query = joined_df.writeStream \
     .foreachBatch(process_attribution_batch) \
     .option("checkpointLocation", f"{args['CHECKPOINT_LOCATION']}/attribution") \
     .outputMode("append") \
     .trigger(processingTime='30 seconds') \
     .start()
 
-# Raw clicks stream
+# Query 2: Raw clicks stream
 clicks_query = clicks_df \
     .select(
         col("event_id"),
@@ -312,7 +264,7 @@ clicks_query = clicks_df \
     .trigger(processingTime='30 seconds') \
     .start()
 
-# Raw checkouts stream
+# Query 3: Raw checkouts stream
 checkouts_query = checkouts_df \
     .select(
         col("event_id"),
@@ -329,8 +281,12 @@ checkouts_query = checkouts_df \
     .trigger(processingTime='30 seconds') \
     .start()
 
-print("Streaming job is running. Waiting for termination...")
-query.awaitTermination()
+print("✅ All streaming queries started successfully")
+print("📊 Processing data every 30 seconds...")
+print("🔄 Job will run continuously until stopped")
+
+# Wait for termination
+attribution_query.awaitTermination()
 clicks_query.awaitTermination()
 checkouts_query.awaitTermination()
 
