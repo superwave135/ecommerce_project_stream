@@ -4,6 +4,12 @@ Processes click and checkout events from Kinesis to perform first-click attribut
 """
 
 import sys
+import os
+
+# FORCE AWS REGION - CRITICAL FOR KINESIS
+os.environ['AWS_DEFAULT_REGION'] = 'ap-southeast-1'
+os.environ['AWS_REGION'] = 'ap-southeast-1'
+
 from datetime import datetime
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
