@@ -13,13 +13,12 @@ from awsglue.job import Job
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, current_timestamp, 
-    window, first, row_number, unix_timestamp, lit, expr
+    window, first, min, unix_timestamp, lit, expr
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType, 
     IntegerType, ArrayType, TimestampType
 )
-from pyspark.sql.window import Window
 
 # Get job parameters
 args = getResolvedOptions(sys.argv, [
@@ -151,25 +150,36 @@ attribution_df = checkouts_with_watermark.alias("checkout") \
         "inner"
     )
 
-# Apply first-click attribution logic
-# For each checkout, select the earliest click (first-click attribution)
-window_spec = Window.partitionBy("checkout.event_id").orderBy("click.event_timestamp")
+# Apply first-click attribution logic (streaming-compatible)
+# For each checkout, find the earliest click using aggregation
+earliest_clicks = attribution_df.groupBy("checkout.event_id") \
+    .agg(
+        min("click.event_timestamp").alias("earliest_click_time"),
+        first("checkout.user_id").alias("user_id"),
+        first("checkout.event_timestamp").alias("checkout_timestamp"),
+        first("checkout.total_amount").alias("revenue")
+    )
 
-attributed_df = attribution_df \
-    .withColumn("click_rank", row_number().over(window_spec)) \
-    .filter(col("click_rank") == 1) \
+# Join back to get the full click details for the earliest click
+attributed_df = earliest_clicks.alias("earliest") \
+    .join(
+        attribution_df.alias("full"),
+        (col("earliest.event_id") == col("full.checkout.event_id")) &
+        (col("earliest.earliest_click_time") == col("full.click.event_timestamp")),
+        "inner"
+    ) \
     .select(
-        col("checkout.event_id").alias("checkout_id"),
-        col("checkout.user_id").alias("user_id"),
-        col("checkout.event_timestamp").alias("checkout_timestamp"),
-        col("click.event_id").alias("attributed_click_id"),
-        col("click.product_id").alias("attributed_product_id"),
-        col("click.product_name").alias("attributed_product_name"),
-        col("click.product_category").alias("attributed_category"),
-        col("click.referrer").alias("traffic_source"),
-        col("click.device_type").alias("device_type"),
-        col("click.event_timestamp").alias("first_click_timestamp"),
-        col("checkout.total_amount").alias("revenue"),
+        col("full.checkout.event_id").alias("checkout_id"),
+        col("earliest.user_id").alias("user_id"),
+        col("earliest.checkout_timestamp").alias("checkout_timestamp"),
+        col("full.click.event_id").alias("attributed_click_id"),
+        col("full.click.product_id").alias("attributed_product_id"),
+        col("full.click.product_name").alias("attributed_product_name"),
+        col("full.click.product_category").alias("attributed_category"),
+        col("full.click.referrer").alias("traffic_source"),
+        col("full.click.device_type").alias("device_type"),
+        col("full.click.event_timestamp").alias("first_click_timestamp"),
+        col("earliest.revenue").alias("revenue"),
         current_timestamp().alias("processed_at")
     )
 
