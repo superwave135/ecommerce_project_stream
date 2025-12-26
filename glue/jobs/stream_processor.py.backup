@@ -51,80 +51,6 @@ spark.conf.set("spark.sql.streaming.schemaInference", "true")
 spark.conf.set("spark.sql.streaming.checkpointLocation", args['CHECKPOINT_LOCATION'])
 spark.conf.set("spark.sql.adaptive.enabled", "true")
 
-
-def create_tables_if_not_exist():
-    """Create PostgreSQL tables if they don't exist"""
-    import psycopg2
-    
-    schema_sql = """
-    CREATE TABLE IF NOT EXISTS events_clicks (
-        event_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        session_id VARCHAR(255),
-        product_id VARCHAR(255),
-        product_category VARCHAR(255),
-        referrer VARCHAR(500),
-        device_type VARCHAR(50),
-        event_timestamp TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS events_checkouts (
-        event_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        session_id VARCHAR(255),
-        total_amount DECIMAL(10,2),
-        payment_method VARCHAR(50),
-        event_timestamp TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS session_attribution (
-        checkout_id VARCHAR(255) PRIMARY KEY,
-        user_id VARCHAR(255) NOT NULL,
-        checkout_timestamp TIMESTAMP,
-        attributed_click_id VARCHAR(255),
-        attributed_product_id VARCHAR(255),
-        attributed_product_name VARCHAR(255),
-        attributed_category VARCHAR(255),
-        traffic_source VARCHAR(500),
-        device_type VARCHAR(50),
-        first_click_timestamp TIMESTAMP,
-        revenue DECIMAL(10,2),
-        attribution_window_seconds INTEGER,
-        processed_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_clicks_user ON events_clicks(user_id);
-    CREATE INDEX IF NOT EXISTS idx_clicks_timestamp ON events_clicks(event_timestamp);
-    CREATE INDEX IF NOT EXISTS idx_checkouts_user ON events_checkouts(user_id);
-    CREATE INDEX IF NOT EXISTS idx_checkouts_timestamp ON events_checkouts(event_timestamp);
-    CREATE INDEX IF NOT EXISTS idx_attribution_user ON session_attribution(user_id);
-    """
-    
-    try:
-        conn = psycopg2.connect(
-            host=args['DATABASE_HOST'],
-            database=args['DATABASE_NAME'],
-            user=args['DATABASE_USER'],
-            password=args['DATABASE_PASSWORD'],
-            port=int(args['DATABASE_PORT'])
-        )
-        with conn.cursor() as cur:
-            cur.execute(schema_sql)
-            conn.commit()
-        conn.close()
-        print("✅ Tables created/verified successfully")
-    except Exception as e:
-        print(f"⚠️ Table creation failed: {e}")
-        raise
-
-
-# Create tables before starting streams
-print("Creating database tables...")
-create_tables_if_not_exist()
-
 # Define schemas
 click_schema = StructType([
     StructField("event_id", StringType(), True),
@@ -212,12 +138,18 @@ def write_to_postgres(batch_df, batch_id, table_name):
 
 
 def process_attribution_batch(batch_df, batch_id):
-    """Process attribution for a micro-batch"""
+    """
+    Process attribution for a micro-batch.
+    This function applies first-click attribution logic using Window functions,
+    which is allowed on batch DataFrames (not streaming DataFrames).
+    """
     try:
         if batch_df.count() == 0:
             print(f"Batch {batch_id}: No records to process for attribution")
             return
         
+        # Apply window function to get the first (earliest) click for each checkout
+        # This works here because batch_df is a regular DataFrame, not a streaming one
         window_spec = Window.partitionBy("checkout_event_id").orderBy("click_event_timestamp")
         
         attributed_df = batch_df \
@@ -238,12 +170,14 @@ def process_attribution_batch(batch_df, batch_id):
                 current_timestamp().alias("processed_at")
             )
         
+        # Calculate attribution window
         final_df = attributed_df.withColumn(
             "attribution_window_seconds",
             unix_timestamp(col("checkout_timestamp")) - unix_timestamp(col("first_click_timestamp"))
         )
         
-        write_to_postgres(final_df, batch_id, "session_attribution")
+        # Write to PostgreSQL
+        write_to_postgres(final_df, batch_id, "attributed_checkouts")
         
     except Exception as e:
         print(f"Error processing attribution batch {batch_id}: {str(e)}")
@@ -255,11 +189,12 @@ print("Reading Kinesis streams...")
 clicks_df = read_kinesis_stream(args['CLICKS_STREAM_NAME'], click_schema)
 checkouts_df = read_kinesis_stream(args['CHECKOUTS_STREAM_NAME'], checkout_schema)
 
-# Add watermarks
+# Add watermarks for late data handling (5 minutes)
 clicks_with_watermark = clicks_df.withWatermark("event_timestamp", "5 minutes")
 checkouts_with_watermark = checkouts_df.withWatermark("event_timestamp", "5 minutes")
 
-# Stream-stream join
+# Perform stream-stream join
+# Join checkouts with clicks that occurred within 1 hour before the checkout
 joined_df = checkouts_with_watermark.alias("checkout") \
     .join(
         clicks_with_watermark.alias("click"),
@@ -282,10 +217,9 @@ joined_df = checkouts_with_watermark.alias("checkout") \
         col("click.event_timestamp").alias("click_event_timestamp")
     )
 
-# Write streams
-print("Starting streaming queries...")
-
-# Attribution stream
+# Write attributed clicks to PostgreSQL using foreachBatch
+# The attribution logic (window function) is applied inside process_attribution_batch
+print("Starting streaming query to PostgreSQL...")
 query = joined_df.writeStream \
     .foreachBatch(process_attribution_batch) \
     .option("checkpointLocation", f"{args['CHECKPOINT_LOCATION']}/attribution") \
@@ -293,12 +227,11 @@ query = joined_df.writeStream \
     .trigger(processingTime='30 seconds') \
     .start()
 
-# Raw clicks stream
+# Also write raw clicks and checkouts for analytics
 clicks_query = clicks_df \
     .select(
         col("event_id"),
         col("user_id"),
-        col("session_id"),
         col("product_id"),
         col("product_category"),
         col("referrer"),
@@ -306,29 +239,28 @@ clicks_query = clicks_df \
         col("event_timestamp")
     ) \
     .writeStream \
-    .foreachBatch(lambda df, batch_id: write_to_postgres(df, batch_id, "events_clicks")) \
+    .foreachBatch(lambda df, batch_id: write_to_postgres(df, batch_id, "raw_clicks")) \
     .option("checkpointLocation", f"{args['CHECKPOINT_LOCATION']}/clicks") \
     .outputMode("append") \
     .trigger(processingTime='30 seconds') \
     .start()
 
-# Raw checkouts stream
 checkouts_query = checkouts_df \
     .select(
         col("event_id"),
         col("user_id"),
-        col("session_id"),
         col("total_amount"),
         col("payment_method"),
         col("event_timestamp")
     ) \
     .writeStream \
-    .foreachBatch(lambda df, batch_id: write_to_postgres(df, batch_id, "events_checkouts")) \
+    .foreachBatch(lambda df, batch_id: write_to_postgres(df, batch_id, "raw_checkouts")) \
     .option("checkpointLocation", f"{args['CHECKPOINT_LOCATION']}/checkouts") \
     .outputMode("append") \
     .trigger(processingTime='30 seconds') \
     .start()
 
+# Wait for all queries to terminate
 print("Streaming job is running. Waiting for termination...")
 query.awaitTermination()
 clicks_query.awaitTermination()
