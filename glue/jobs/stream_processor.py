@@ -10,10 +10,10 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Window
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, current_timestamp, 
-    window, first, min, unix_timestamp, lit, expr
+    window, first, min, unix_timestamp, lit, expr, row_number
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType, 
@@ -92,7 +92,7 @@ def read_kinesis_stream(stream_name, schema):
     kinesis_df = spark.readStream \
         .format("kinesis") \
         .option("streamName", stream_name) \
-        .option("region", "us-east-1") \
+        .option("region", "ap-southeast-1") \
         .option("initialPosition", "TRIM_HORIZON") \
         .option("format", "json") \
         .load()
@@ -124,9 +124,9 @@ def write_to_postgres(batch_df, batch_id, table_name):
                 )
             print(f"Batch {batch_id}: Written {batch_df.count()} records to {table_name}")
         else:
-            print(f"Batch {batch_id}: No records to write")
+            print(f"Batch {batch_id}: No records to write to {table_name}")
     except Exception as e:
-        print(f"Error writing batch {batch_id} to PostgreSQL: {str(e)}")
+        print(f"Error writing batch {batch_id} to PostgreSQL {table_name}: {str(e)}")
         raise
 
 
@@ -139,9 +139,9 @@ checkouts_df = read_kinesis_stream(args['CHECKOUTS_STREAM_NAME'], checkout_schem
 clicks_with_watermark = clicks_df.withWatermark("event_timestamp", "5 minutes")
 checkouts_with_watermark = checkouts_df.withWatermark("event_timestamp", "5 minutes")
 
-# Perform stream-stream join
+# Perform stream-stream join with window function for first-click attribution
 # Join checkouts with clicks that occurred within 1 hour before the checkout
-attribution_df = checkouts_with_watermark.alias("checkout") \
+joined_df = checkouts_with_watermark.alias("checkout") \
     .join(
         clicks_with_watermark.alias("click"),
         (col("checkout.user_id") == col("click.user_id")) &
@@ -150,28 +150,17 @@ attribution_df = checkouts_with_watermark.alias("checkout") \
         "inner"
     )
 
-# Apply first-click attribution logic (streaming-compatible)
-# For each checkout, find the earliest click using aggregation
-earliest_clicks = attribution_df.groupBy("checkout.event_id") \
-    .agg(
-        min("click.event_timestamp").alias("earliest_click_time"),
-        first("checkout.user_id").alias("user_id"),
-        first("checkout.event_timestamp").alias("checkout_timestamp"),
-        first("checkout.total_amount").alias("revenue")
-    )
+# Use window function to get the first (earliest) click for each checkout
+# This avoids streaming aggregation issues
+window_spec = Window.partitionBy("checkout.event_id").orderBy("click.event_timestamp")
 
-# Join back to get the full click details for the earliest click
-attributed_df = earliest_clicks.alias("earliest") \
-    .join(
-        attribution_df,
-        (col("earliest.event_id") == col("checkout.event_id")) &
-        (col("earliest.earliest_click_time") == col("click.event_timestamp")),
-        "inner"
-    ) \
+attributed_df = joined_df \
+    .withColumn("click_rank", row_number().over(window_spec)) \
+    .filter(col("click_rank") == 1) \
     .select(
         col("checkout.event_id").alias("checkout_id"),
-        col("earliest.user_id").alias("user_id"),
-        col("earliest.checkout_timestamp").alias("checkout_timestamp"),
+        col("checkout.user_id").alias("user_id"),
+        col("checkout.event_timestamp").alias("checkout_timestamp"),
         col("click.event_id").alias("attributed_click_id"),
         col("click.product_id").alias("attributed_product_id"),
         col("click.product_name").alias("attributed_product_name"),
@@ -179,7 +168,7 @@ attributed_df = earliest_clicks.alias("earliest") \
         col("click.referrer").alias("traffic_source"),
         col("click.device_type").alias("device_type"),
         col("click.event_timestamp").alias("first_click_timestamp"),
-        col("earliest.revenue").alias("revenue"),
+        col("checkout.total_amount").alias("revenue"),
         current_timestamp().alias("processed_at")
     )
 
