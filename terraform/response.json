@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": "{\"message\": \"Action start completed successfully\", \"result\": {\"status\": \"started\", \"job_run_id\": \"jr_1f27b0b4aa66fb83f258f3f505ac76d3bcb5f40bd09065cf764b13d5eea91c90\", \"job_name\": \"ecommerce-streaming-dev-stream-processor\"}, \"timestamp\": \"2025-12-26T15:03:35.791477\"}"}
