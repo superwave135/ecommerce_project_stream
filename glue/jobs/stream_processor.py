@@ -130,6 +130,53 @@ def write_to_postgres(batch_df, batch_id, table_name):
         raise
 
 
+def process_attribution_batch(batch_df, batch_id):
+    """
+    Process attribution for a micro-batch.
+    This function applies first-click attribution logic using Window functions,
+    which is allowed on batch DataFrames (not streaming DataFrames).
+    """
+    try:
+        if batch_df.count() == 0:
+            print(f"Batch {batch_id}: No records to process for attribution")
+            return
+        
+        # Apply window function to get the first (earliest) click for each checkout
+        # This works here because batch_df is a regular DataFrame, not a streaming one
+        window_spec = Window.partitionBy("checkout_event_id").orderBy("click_event_timestamp")
+        
+        attributed_df = batch_df \
+            .withColumn("click_rank", row_number().over(window_spec)) \
+            .filter(col("click_rank") == 1) \
+            .select(
+                col("checkout_event_id").alias("checkout_id"),
+                col("checkout_user_id").alias("user_id"),
+                col("checkout_event_timestamp").alias("checkout_timestamp"),
+                col("click_event_id").alias("attributed_click_id"),
+                col("click_product_id").alias("attributed_product_id"),
+                col("click_product_name").alias("attributed_product_name"),
+                col("click_product_category").alias("attributed_category"),
+                col("click_referrer").alias("traffic_source"),
+                col("click_device_type").alias("device_type"),
+                col("click_event_timestamp").alias("first_click_timestamp"),
+                col("checkout_total_amount").alias("revenue"),
+                current_timestamp().alias("processed_at")
+            )
+        
+        # Calculate attribution window
+        final_df = attributed_df.withColumn(
+            "attribution_window_seconds",
+            unix_timestamp(col("checkout_timestamp")) - unix_timestamp(col("first_click_timestamp"))
+        )
+        
+        # Write to PostgreSQL
+        write_to_postgres(final_df, batch_id, "attributed_checkouts")
+        
+    except Exception as e:
+        print(f"Error processing attribution batch {batch_id}: {str(e)}")
+        raise
+
+
 # Read streams
 print("Reading Kinesis streams...")
 clicks_df = read_kinesis_stream(args['CLICKS_STREAM_NAME'], click_schema)
@@ -139,7 +186,7 @@ checkouts_df = read_kinesis_stream(args['CHECKOUTS_STREAM_NAME'], checkout_schem
 clicks_with_watermark = clicks_df.withWatermark("event_timestamp", "5 minutes")
 checkouts_with_watermark = checkouts_df.withWatermark("event_timestamp", "5 minutes")
 
-# Perform stream-stream join with window function for first-click attribution
+# Perform stream-stream join
 # Join checkouts with clicks that occurred within 1 hour before the checkout
 joined_df = checkouts_with_watermark.alias("checkout") \
     .join(
@@ -148,40 +195,26 @@ joined_df = checkouts_with_watermark.alias("checkout") \
         (col("click.event_timestamp") <= col("checkout.event_timestamp")) &
         (col("click.event_timestamp") >= col("checkout.event_timestamp") - expr("INTERVAL 1 HOUR")),
         "inner"
-    )
-
-# Use window function to get the first (earliest) click for each checkout
-# This avoids streaming aggregation issues
-window_spec = Window.partitionBy("checkout.event_id").orderBy("click.event_timestamp")
-
-attributed_df = joined_df \
-    .withColumn("click_rank", row_number().over(window_spec)) \
-    .filter(col("click_rank") == 1) \
+    ) \
     .select(
-        col("checkout.event_id").alias("checkout_id"),
-        col("checkout.user_id").alias("user_id"),
-        col("checkout.event_timestamp").alias("checkout_timestamp"),
-        col("click.event_id").alias("attributed_click_id"),
-        col("click.product_id").alias("attributed_product_id"),
-        col("click.product_name").alias("attributed_product_name"),
-        col("click.product_category").alias("attributed_category"),
-        col("click.referrer").alias("traffic_source"),
-        col("click.device_type").alias("device_type"),
-        col("click.event_timestamp").alias("first_click_timestamp"),
-        col("checkout.total_amount").alias("revenue"),
-        current_timestamp().alias("processed_at")
+        col("checkout.event_id").alias("checkout_event_id"),
+        col("checkout.user_id").alias("checkout_user_id"),
+        col("checkout.event_timestamp").alias("checkout_event_timestamp"),
+        col("checkout.total_amount").alias("checkout_total_amount"),
+        col("click.event_id").alias("click_event_id"),
+        col("click.product_id").alias("click_product_id"),
+        col("click.product_name").alias("click_product_name"),
+        col("click.product_category").alias("click_product_category"),
+        col("click.referrer").alias("click_referrer"),
+        col("click.device_type").alias("click_device_type"),
+        col("click.event_timestamp").alias("click_event_timestamp")
     )
 
-# Calculate attribution window (time between first click and checkout)
-final_df = attributed_df.withColumn(
-    "attribution_window_seconds",
-    unix_timestamp(col("checkout_timestamp")) - unix_timestamp(col("first_click_timestamp"))
-)
-
-# Write attributed clicks to PostgreSQL
+# Write attributed clicks to PostgreSQL using foreachBatch
+# The attribution logic (window function) is applied inside process_attribution_batch
 print("Starting streaming query to PostgreSQL...")
-query = final_df.writeStream \
-    .foreachBatch(lambda df, batch_id: write_to_postgres(df, batch_id, "attributed_checkouts")) \
+query = joined_df.writeStream \
+    .foreachBatch(process_attribution_batch) \
     .option("checkpointLocation", f"{args['CHECKPOINT_LOCATION']}/attribution") \
     .outputMode("append") \
     .trigger(processingTime='30 seconds') \
