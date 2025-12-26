@@ -6,7 +6,7 @@
 # ============================================
 
 resource "aws_kinesis_stream" "clicks" {
-  name = "${local.resource_prefix}-clicks"
+  name = "ecommerce-clicks-${var.environment}"
   
   # Use on-demand mode for cost optimization (pay per use)
   stream_mode_details {
@@ -33,7 +33,7 @@ resource "aws_kinesis_stream" "clicks" {
 # ============================================
 
 resource "aws_kinesis_stream" "checkouts" {
-  name = "${local.resource_prefix}-checkouts"
+  name = "ecommerce-checkouts-${var.environment}"
   
   # Use on-demand mode for cost optimization (pay per use)
   stream_mode_details {
