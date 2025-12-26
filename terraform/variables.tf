@@ -126,7 +126,7 @@ variable "db_instance_class" {
 variable "db_engine_version" {
   description = "PostgreSQL engine version"
   type        = string
-  default     = "15.4"
+  default     = "15.15"
 }
 
 variable "db_allocated_storage" {
@@ -144,7 +144,7 @@ variable "db_name" {
 variable "db_username" {
   description = "Master username for RDS"
   type        = string
-  default     = "admin"
+  default     = "dbadmin"
   sensitive   = true
 }
 
