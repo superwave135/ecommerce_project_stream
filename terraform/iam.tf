@@ -45,8 +45,8 @@ resource "aws_iam_role_policy" "data_generator_kinesis" {
           "kinesis:PutRecords"
         ]
         Resource = [
-          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-clicks-dev",
-          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-checkouts-dev"
+          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-streaming-dev-clicks",
+          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-streaming-dev-checkouts"
         ]
       },
       {
@@ -173,8 +173,8 @@ resource "aws_iam_role_policy" "glue_job_custom" {
           "kinesis:SubscribeToShard"
         ]
         Resource = [
-          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-clicks-dev",
-          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-checkouts-dev"
+          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-streaming-dev-clicks",
+          "arn:aws:kinesis:ap-southeast-1:881786084229:stream/ecommerce-streaming-dev-checkouts"
         ]
       },
       {
