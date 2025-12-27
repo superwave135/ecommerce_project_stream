@@ -288,3 +288,33 @@ For issues or questions:
 ---
 
 **Built with ❤️ for learning AWS data engineering**
+
+------------------------------------------------------------------------------------------------------
+For Future Reference - Here's Your "View Tables" Command:
+Save this in your notes or README. Anytime you want to view the data:
+
+# 1. Make sure script is uploaded
+aws s3 cp scripts/query_tables.py s3://ecommerce-streaming-dev-scripts-881786084229/glue/query_tables.py
+
+# 2. Create temp job
+aws glue create-job \
+  --name ecommerce-query-temp \
+  --role arn:aws:iam::881786084229:role/ecommerce-streaming-dev-glue-job-role \
+  --command '{"Name": "glueetl", "ScriptLocation": "s3://ecommerce-streaming-dev-scripts-881786084229/glue/query_tables.py", "PythonVersion": "3"}' \
+  --glue-version "4.0" \
+  --number-of-workers 2 \
+  --worker-type "G.1X" \
+  --connections Connections=["ecommerce-streaming-dev-postgres-connection"] \
+  --region ap-southeast-1
+
+# 3. Run it
+aws glue start-job-run --job-name ecommerce-query-temp --region ap-southeast-1
+
+# 4. Wait 2 min, then view results
+sleep 120
+aws logs tail /aws-glue/jobs/output --since 3m --region ap-southeast-1 --format short
+
+# 5. Delete when done
+aws glue delete-job --job-name ecommerce-query-temp --region ap-southeast-1
+
+------------------------------------------------------------------------------------------------------
