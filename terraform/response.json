@@ -1,1 +1,1 @@
-{"statusCode": 200, "body": "{\"message\": \"Action stop completed successfully\", \"result\": {\"status\": \"stopped\", \"job_runs_stopped\": [\"jr_c26a71cb0e86f04c819f23a3b84fbf1bffaba5a3f6fd1de080b32761dec43cb0\"], \"count\": 1}, \"timestamp\": \"2025-12-26T19:55:18.944728\"}"}
+{"statusCode": 200, "body": "{\"message\": \"Action stop completed successfully\", \"result\": {\"status\": \"no_running_jobs\", \"message\": \"No active jobs to stop\"}, \"timestamp\": \"2026-01-15T08:34:46.016658\"}"}
